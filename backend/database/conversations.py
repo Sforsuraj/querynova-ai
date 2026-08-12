@@ -1,5 +1,6 @@
 """Persistent, conversation-scoped chat history for QueryNova."""
 import json
+import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -7,16 +8,23 @@ from pathlib import Path
 
 from backend.config import ROOT
 
-# Vercel's filesystem is not durable. /tmp lets the demo handle a warm function
-# safely, while the README explicitly documents that production history needs a
-# hosted database.
-HISTORY_DB = Path('/tmp/querynova_history.db') if __import__('os').getenv('VERCEL') else Path(ROOT) / 'database' / 'querynova_history.db'
+# Never write user history to the Vercel filesystem. A warm function uses an
+# in-memory demo store; durable serverless history requires a hosted database.
+HISTORY_DB = ':memory:' if os.getenv('VERCEL') else str(Path(ROOT) / 'database' / 'querynova_history.db')
+_memory_connection = None
 
 def now():
     return datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
 
 def connect():
-    HISTORY_DB.parent.mkdir(parents=True, exist_ok=True)
+    global _memory_connection
+    if HISTORY_DB == ':memory:':
+        if _memory_connection is None:
+            _memory_connection = sqlite3.connect(':memory:', check_same_thread=False)
+            _memory_connection.row_factory = sqlite3.Row
+            _memory_connection.execute('PRAGMA foreign_keys = ON')
+        return _memory_connection
+    Path(HISTORY_DB).parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(HISTORY_DB)
     con.row_factory = sqlite3.Row
     con.execute('PRAGMA foreign_keys = ON')

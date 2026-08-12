@@ -3,10 +3,12 @@
   "installCommand": "cd frontend && npm install",
   "buildCommand": "cd frontend && npm run build",
   "outputDirectory": "frontend/dist",
-  "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "/api/index.py"
+  "functions": {
+    "api/index.py": {
+      "includeFiles": "backend/database/ecommerce.db"
+    },
+    "api/[...path].py": {
+      "includeFiles": "backend/database/ecommerce.db"
     }
-  ]
+  }
 }

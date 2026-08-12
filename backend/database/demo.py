@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from sqlalchemy import create_engine, text
 from backend.config import DATABASE_URL
@@ -18,6 +19,9 @@ def ensure_demo_database():
         return
     path = Path(DATABASE_URL.replace('sqlite:///', ''))
     if path.exists(): return
+    # The bundled database is read-only on Vercel. Do not seed or create files
+    # in a serverless invocation if the packaged asset is missing.
+    if os.getenv('VERCEL'): return
     path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(DATABASE_URL)
     with engine.begin() as con:

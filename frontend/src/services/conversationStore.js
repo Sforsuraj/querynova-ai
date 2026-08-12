@@ -1,5 +1,5 @@
 import axios from 'axios';
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8080/api';
+const API = import.meta.env.VITE_API_URL || '/api';
 export const conversationApi = {
   list: search => axios.get(`${API}/conversations`, {params: search ? {search} : {}}).then(r => r.data),
   create: () => axios.post(`${API}/conversations`, {}).then(r => r.data),

@@ -45,7 +45,7 @@ Copy `.env.example` to `.env` for local development. Never commit `.env` or put 
 | `OPENROUTER_MODEL` | Yes | Model/router, e.g. `openrouter/free` |
 | `OPENROUTER_APP_NAME` | Yes | Application attribution |
 | `OPENROUTER_SITE_URL` | Optional | Final Vercel URL |
-| `DATABASE_URL` | Yes | `sqlite:///database/ecommerce.db` for demo |
+| `DATABASE_URL` | Yes | `sqlite:///backend/database/ecommerce.db` for demo |
 | `MAX_QUERY_ROWS` | Yes | Read-only query result limit |
 | `QUERY_TIMEOUT_SECONDS` | Yes | Query timeout setting |
 | `VITE_API_URL` | Build-time | `/api` in production |
@@ -63,8 +63,8 @@ In a second terminal:
 
 ```bash
 cd frontend
-pnpm install
-pnpm run dev
+npm install
+npm run dev
 ```
 
 Open `http://localhost:5173`. To test the same routing topology locally, install the Vercel CLI and run `vercel dev` at the repository root.
@@ -73,7 +73,7 @@ Open `http://localhost:5173`. To test the same routing topology locally, install
 
 1. Push this repository to GitHub.
 2. In Vercel, import the GitHub repository with the **repository root** as the project root.
-3. Vercel uses `vercel.json` to install/build `frontend`, publish `frontend/dist`, and route `/api/*` to `api/index.py`.
+3. Vercel uses `vercel.json` to install/build `frontend`, publish `frontend/dist`, and discover `api/index.py` plus the native catch-all `api/[...path].py` for `/api/*`.
 4. In **Settings → Environment Variables**, add the required variables listed above. Set `VITE_API_URL=/api`.
 5. Optionally set `OPENROUTER_SITE_URL` to your deployed `https://…vercel.app` URL.
 6. Deploy, then open `https://YOUR-PROJECT.vercel.app/api/health`.
@@ -95,7 +95,7 @@ No separate backend host is required: the static client and Flask API run from o
 
 `ecommerce.db` is packaged as a **read-only sample database** for the hackathon demo. SQLite paths are resolved relative to the deployed project, not a machine-specific directory.
 
-Vercel functions are stateless and their writable filesystem is not durable. Conversation history uses `/tmp` on Vercel only as a best-effort warm-function demo store; it is not reliable persistent storage. For production chat history, replace it with a hosted database such as PostgreSQL. Do not rely on in-memory state, background processes, or self-pinging.
+Vercel functions are stateless and their writable filesystem is not durable. QueryNova deliberately does **not** write chat history to the Vercel filesystem: it uses an in-memory warm-function demo store only. That history disappears on cold starts and must be replaced with a hosted database such as PostgreSQL for durable production history. Do not rely on background processes or self-pinging.
 
 ## Security
 
@@ -116,4 +116,4 @@ Vercel functions are stateless and their writable filesystem is not durable. Con
 
 - `/api/health` failing: check Python dependency installation and database path settings.
 - AI request unavailable: confirm the OpenRouter key and model are configured in Vercel.
-- Lost history after a serverless cold start: expected with the demo SQLite history store; use a hosted database for durable history.
+- Lost history after a serverless cold start: expected with the in-memory demo history store; use a hosted database for durable history.

@@ -1,6 +1,7 @@
 import logging, os, uuid
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from werkzeug.exceptions import HTTPException
 from backend.database.demo import ensure_demo_database
 from backend.tools.schema_tool import get_schema
 from backend.tools.query_tool import execute_query
@@ -13,13 +14,22 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 def create_app():
     ensure_demo_database()
     conversations.initialize()
-    app = Flask(__name__); CORS(app, origins=os.getenv('FRONTEND_URL', 'http://localhost:5173'))
+    app = Flask(__name__)
+    # Production is same-origin (/api); CORS is only needed for local Vite.
+    CORS(app, resources={r'/api/*': {'origins': os.getenv('FRONTEND_URL', 'http://localhost:5173').split(',')}})
+    @app.errorhandler(Exception)
+    def unhandled_error(error):
+        if isinstance(error, HTTPException):
+            return jsonify(error=error.description), error.code
+        app.logger.exception('Unhandled API error')
+        return jsonify(error='QueryNova is temporarily unavailable. Please try again.'), 500
     @app.get('/api/health')
     def health():
         try:
-            schema = get_schema(); return jsonify(status='ok', service='querynova-backend', database='connected', table_count=len(schema['tables']))
+            schema = get_schema(); return jsonify(status='ok', service='QueryNova AI', database='connected', table_count=len(schema['tables']))
         except Exception:
-            return jsonify(status='unavailable', database='unavailable'), 503
+            app.logger.exception('Database health check failed')
+            return jsonify(status='unavailable', service='QueryNova AI', database='unavailable'), 503
     @app.get('/api/schema')
     def schema(): return jsonify(get_schema())
     @app.post('/api/query')
