@@ -2,21 +2,37 @@ import logging, os, uuid
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
-from backend.database.demo import ensure_demo_database
-from backend.tools.schema_tool import get_schema
-from backend.tools.query_tool import execute_query
-from backend.tools.chart_tool import generate_chart
-from backend.tools.flowchart_tool import generate_er_diagram, generate_order_flowchart
-from backend.agent.agent import agent
-from backend.database import conversations
+try:
+    from backend.database.demo import ensure_demo_database
+    from backend.tools.schema_tool import get_schema
+    from backend.tools.query_tool import execute_query
+    from backend.tools.chart_tool import generate_chart
+    from backend.tools.flowchart_tool import generate_er_diagram, generate_order_flowchart
+    from backend.agent.agent import agent
+    from backend.database import conversations
+except ModuleNotFoundError:
+    from database.demo import ensure_demo_database
+    from tools.schema_tool import get_schema
+    from tools.query_tool import execute_query
+    from tools.chart_tool import generate_chart
+    from tools.flowchart_tool import generate_er_diagram, generate_order_flowchart
+    from agent.agent import agent
+    from database import conversations
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+_initialized = False
 def create_app():
-    ensure_demo_database()
-    conversations.initialize()
     app = Flask(__name__)
     # Production is same-origin (/api); CORS is only needed for local Vite.
     CORS(app, resources={r'/api/*': {'origins': os.getenv('FRONTEND_URL', 'http://localhost:5173').split(',')}})
+    @app.before_request
+    def initialize_runtime():
+        global _initialized
+        if request.path == '/api/health' or _initialized:
+            return None
+        ensure_demo_database()
+        conversations.initialize()
+        _initialized = True
     @app.errorhandler(Exception)
     def unhandled_error(error):
         if isinstance(error, HTTPException):
@@ -26,10 +42,10 @@ def create_app():
     @app.get('/api/health')
     def health():
         try:
-            schema = get_schema(); return jsonify(status='ok', service='QueryNova AI', database='connected', table_count=len(schema['tables']))
+            return jsonify(status='ok', service='QueryNova AI', runtime='vercel-python')
         except Exception:
-            app.logger.exception('Database health check failed')
-            return jsonify(status='unavailable', service='QueryNova AI', database='unavailable'), 503
+            app.logger.exception('Health check failed')
+            return jsonify(error=True, message='QueryNova is temporarily unavailable.'), 503
     @app.get('/api/schema')
     def schema(): return jsonify(get_schema())
     @app.post('/api/query')

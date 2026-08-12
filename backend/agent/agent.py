@@ -1,13 +1,22 @@
 import json
 import re
 from typing import Any
-from backend.llm.client import LLMClient, LLMServiceError
-from backend.llm.config import OpenRouterConfig
-from backend.tools.chart_tool import generate_chart
-from backend.tools.explain_tool import explain_data
-from backend.tools.flowchart_tool import generate_er_diagram, generate_order_flowchart
-from backend.tools.query_tool import execute_query
-from backend.tools.schema_tool import get_schema
+try:
+    from backend.llm.client import LLMClient, LLMServiceError
+    from backend.llm.config import OpenRouterConfig
+    from backend.tools.chart_tool import generate_chart
+    from backend.tools.explain_tool import explain_data
+    from backend.tools.flowchart_tool import generate_er_diagram, generate_order_flowchart
+    from backend.tools.query_tool import execute_query
+    from backend.tools.schema_tool import get_schema
+except ModuleNotFoundError:
+    from llm.client import LLMClient, LLMServiceError
+    from llm.config import OpenRouterConfig
+    from tools.chart_tool import generate_chart
+    from tools.explain_tool import explain_data
+    from tools.flowchart_tool import generate_er_diagram, generate_order_flowchart
+    from tools.query_tool import execute_query
+    from tools.schema_tool import get_schema
 
 TOOL_DEFINITIONS = [
     {'type':'function','function':{'name':'get_schema','description':'Retrieve the actual database schema before database analysis.','parameters':{'type':'object','properties':{},'additionalProperties':False}}},

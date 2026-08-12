@@ -1,7 +1,10 @@
 import logging, time
 from typing import Any
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
-from backend.llm.config import OpenRouterConfig
+try:
+    from backend.llm.config import OpenRouterConfig
+except ModuleNotFoundError:
+    from llm.config import OpenRouterConfig
 
 logger = logging.getLogger(__name__)
 class LLMServiceError(RuntimeError): pass

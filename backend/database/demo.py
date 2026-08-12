@@ -1,7 +1,10 @@
 import os
 from pathlib import Path
 from sqlalchemy import create_engine, text
-from backend.config import DATABASE_URL
+try:
+    from backend.config import DATABASE_URL
+except ModuleNotFoundError:
+    from config import DATABASE_URL
 
 DDL = '''
 CREATE TABLE categories (id INTEGER PRIMARY KEY, name TEXT NOT NULL);

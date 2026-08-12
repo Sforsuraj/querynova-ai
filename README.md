@@ -1,65 +1,80 @@
 # QueryNova AI
 
-**Ask your data. Discover what's next.**
+Ask your data. Discover what's next.
 
-QueryNova AI is a conversational analytics workspace for the bundled e-commerce sample database. It combines a React/Vite interface with a Flask AI agent, safe read-only SQL, charts, SQL transparency, ER diagrams, flowcharts, and conversation history.
+QueryNova is deployed as two independent Vercel projects from the same GitHub repository: a React/Vite frontend and a Flask/Python API. The backend safely queries the bundled read-only e-commerce SQLite sample and uses OpenRouter only from server code.
 
-## Architecture
+## Deployment architecture
 
 ```text
-User → Vercel
-       ├─ React + Vite frontend (/)
-       └─ Flask API (/api)
-            ├─ QueryNova agent → OpenRouter → LLM
-            └─ SQLite sample database
+Browser → querynova-frontend.vercel.app → querynova-backend.vercel.app/api/*
+                                              ├─ OpenRouter
+                                              └─ SQLite ecommerce.db (read-only sample)
 ```
-
-The browser calls the same deployment with relative `/api` paths. OpenRouter credentials are used only by the Python function.
-
-## Features
-
-- Persistent conversation UI, search, rename, delete, and regeneration
-- Safe `SELECT`/`WITH` SQL only
-- Grounded agent tool calls: schema, query, chart, diagram, and insight tools
-- Bar, line, pie, and scatter charts attached to each response
-- Mermaid ER diagrams and order-flow diagrams
-- Collapsible SQL, CSV export, result tables, and connection health endpoint
 
 ## Project structure
 
 ```text
-api/index.py                 Vercel Python/Flask entry point
-backend/                     Flask application, agent, tools, SQLite database
-frontend/                    React/Vite client
-vercel.json                  Vercel build and /api routing
-requirements.txt             Python dependencies for Vercel
+frontend/                 Independent Vite project
+  vercel.json
+backend/                  Independent Flask project
+  api/index.py            Vercel function entry point
+  api/[...path].py        Catch-all for /api/*
+  requirements.txt
+  vercel.json
+  database/ecommerce.db
 ```
 
-## Environment variables
+## Frontend deployment — querynova-frontend
 
-Copy `.env.example` to `.env` for local development. Never commit `.env` or put secrets in the client.
+1. In Vercel, import `Sforsuraj/querynova-ai`.
+2. Set **Root Directory** to `frontend`.
+3. Use framework **Vite**, build command `npm run build`, output directory `dist`.
+4. Add this environment variable before deployment:
 
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `OPENROUTER_API_KEY` | Yes | Server-side OpenRouter credential |
-| `OPENROUTER_MODEL` | Yes | Model/router, e.g. `openrouter/free` |
-| `OPENROUTER_APP_NAME` | Yes | Application attribution |
-| `OPENROUTER_SITE_URL` | Optional | Final Vercel URL |
-| `DATABASE_URL` | Yes | `sqlite:///backend/database/ecommerce.db` for demo |
-| `MAX_QUERY_ROWS` | Yes | Read-only query result limit |
-| `QUERY_TIMEOUT_SECONDS` | Yes | Query timeout setting |
-| `VITE_API_URL` | Build-time | `/api` in production |
+```env
+VITE_API_URL=https://querynova-backend.vercel.app
+```
 
-For local Vite development, use `VITE_API_URL=http://localhost:8080/api` and `FRONTEND_URL=http://localhost:5173`.
+5. Deploy and open `https://querynova-frontend.vercel.app`.
 
-## Local setup
+## Backend deployment — querynova-backend
+
+1. Import the same repository into a second Vercel project.
+2. Set **Root Directory** to `backend`.
+3. Do not set a build command or run Flask/Gunicorn. Vercel detects `api/index.py` as a Python function and `api/[...path].py` handles `/api/*`.
+4. Add these environment variables:
+
+```env
+OPENROUTER_API_KEY   (set this only in the Vercel dashboard)
+OPENROUTER_MODEL=openrouter/free
+OPENROUTER_APP_NAME=QueryNova AI
+OPENROUTER_SITE_URL=https://querynova-frontend.vercel.app
+FRONTEND_URL=https://querynova-frontend.vercel.app
+MAX_QUERY_ROWS=500
+QUERY_TIMEOUT_SECONDS=10
+DATABASE_URL=sqlite:///database/ecommerce.db
+```
+
+5. Deploy and test `https://querynova-backend.vercel.app/api/health`.
+
+Expected response:
+
+```json
+{"status":"ok","service":"QueryNova AI","runtime":"vercel-python"}
+```
+
+## Local development
+
+Backend:
 
 ```bash
+cd backend
 pip install -r requirements.txt
-python -m backend.app
+python app.py
 ```
 
-In a second terminal:
+Frontend:
 
 ```bash
 cd frontend
@@ -67,53 +82,19 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`. To test the same routing topology locally, install the Vercel CLI and run `vercel dev` at the repository root.
+Set `VITE_API_URL=http://localhost:8080` locally. The backend CORS allow-list is configured by `FRONTEND_URL` and should be `http://localhost:5173` locally.
 
-## Vercel deployment
+## Security and limitations
 
-1. Push this repository to GitHub.
-2. In Vercel, import the GitHub repository with the **repository root** as the project root.
-3. Vercel uses `vercel.json` to install/build `frontend`, publish `frontend/dist`, and discover `api/index.py` plus the native catch-all `api/[...path].py` for `/api/*`.
-4. In **Settings → Environment Variables**, add the required variables listed above. Set `VITE_API_URL=/api`.
-5. Optionally set `OPENROUTER_SITE_URL` to your deployed `https://…vercel.app` URL.
-6. Deploy, then open `https://YOUR-PROJECT.vercel.app/api/health`.
-7. Test a ranking prompt and `Draw me the ER diagram for this database.`
-
-No separate backend host is required: the static client and Flask API run from one Vercel project.
+- Never add `OPENROUTER_API_KEY` or any `VITE_OPENROUTER_API_KEY` to the frontend.
+- `.env` files are ignored; `.env.example` contains placeholders only.
+- SQLite is packaged as a read-only sample. Vercel has no durable local filesystem, so persistent production chat history needs a hosted database.
+- SQL is limited to a single read-only `SELECT` or `WITH` statement.
 
 ## API
 
-- `GET /api/health` — lightweight backend/database status
-- `GET /api/schema` — cached database schema
-- `POST /api/chat`, `POST /api/query`, `POST /api/chart`, `POST /api/flowchart`
+- `GET /api/health`, `GET /api/schema`
+- `POST /api/chat`, `/api/query`, `/api/chart`, `/api/flowchart`
 - `GET|POST /api/conversations`
 - `GET|PUT|DELETE /api/conversations/:id`
 - `POST /api/conversations/:id/messages`
-- `POST /api/conversations/:id/messages/:messageId/regenerate`
-
-## Database and serverless limitations
-
-`ecommerce.db` is packaged as a **read-only sample database** for the hackathon demo. SQLite paths are resolved relative to the deployed project, not a machine-specific directory.
-
-Vercel functions are stateless and their writable filesystem is not durable. QueryNova deliberately does **not** write chat history to the Vercel filesystem: it uses an in-memory warm-function demo store only. That history disappears on cold starts and must be replaced with a hosted database such as PostgreSQL for durable production history. Do not rely on background processes or self-pinging.
-
-## Security
-
-- Keep `OPENROUTER_API_KEY` in Vercel server environment variables only.
-- The frontend never receives provider secrets.
-- SQL is restricted to a single read-only `SELECT` or `WITH` query.
-- Database results, chart values, and diagrams are generated from actual tool output.
-
-## Hackathon demo
-
-1. Ask: `Show me the top 5 products by revenue this quarter.`
-2. Open the chart and generated SQL.
-3. Ask: `Now show their trend over the last year.`
-4. Ask for the ER diagram.
-5. Create a new chat and switch back to demonstrate isolated history.
-
-## Troubleshooting
-
-- `/api/health` failing: check Python dependency installation and database path settings.
-- AI request unavailable: confirm the OpenRouter key and model are configured in Vercel.
-- Lost history after a serverless cold start: expected with the in-memory demo history store; use a hosted database for durable history.

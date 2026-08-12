@@ -1,8 +1,12 @@
 import time
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
-from backend.config import DATABASE_URL, MAX_QUERY_ROWS
-from backend.database.sql_validator import validate_read_only_sql, SQLValidationError
+try:
+    from backend.config import DATABASE_URL, MAX_QUERY_ROWS
+    from backend.database.sql_validator import validate_read_only_sql, SQLValidationError
+except ModuleNotFoundError:
+    from config import DATABASE_URL, MAX_QUERY_ROWS
+    from database.sql_validator import validate_read_only_sql, SQLValidationError
 
 def execute_query(sql: str):
     started = time.perf_counter()

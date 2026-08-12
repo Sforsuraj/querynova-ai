@@ -1,6 +1,9 @@
 from functools import lru_cache
 from sqlalchemy import create_engine, inspect
-from backend.config import DATABASE_URL
+try:
+    from backend.config import DATABASE_URL
+except ModuleNotFoundError:
+    from config import DATABASE_URL
 
 @lru_cache(maxsize=1)
 def get_schema():

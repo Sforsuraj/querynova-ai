@@ -25,7 +25,8 @@ import {
 import ChartRenderer from "./components/ChartRenderer";
 import { conversationApi } from "./services/conversationStore";
 import "./style.css";
-const API = import.meta.env.VITE_API_URL || "/api";
+const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? "http://localhost:8080" : "");
+const API = `${API_URL}/api`;
 const prompts = [
   [
     "Sales performance",

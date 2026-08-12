@@ -15,7 +15,7 @@ def database_url():
         path = Path(configured[len(prefix):])
         if not path.is_absolute() and str(path) != ':memory:':
             project_path, backend_path = ROOT.parent / path, ROOT / path
-            resolved = project_path if project_path.exists() else backend_path
+            resolved = backend_path if backend_path.exists() else project_path
             return f"{prefix}{resolved.resolve()}"
     return configured
 

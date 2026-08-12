@@ -6,7 +6,10 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from backend.config import ROOT
+try:
+    from backend.config import ROOT
+except ModuleNotFoundError:
+    from config import ROOT
 
 # Never write user history to the Vercel filesystem. A warm function uses an
 # in-memory demo store; durable serverless history requires a hosted database.
