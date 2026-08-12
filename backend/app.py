@@ -50,7 +50,7 @@ def create_app():
     # --------------- CORS ---------------
     CORS(
         app,
-        resources={r'/api/*': {
+        resources={r'/*': {
             'origins': allowed_frontend_origins(),
             'allow_headers': ['Content-Type', 'Authorization', 'X-Requested-With'],
             'methods': ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -75,12 +75,26 @@ def create_app():
     @app.before_request
     def initialize_runtime():
         global _initialized
-        skip = request.path in ('/api/health', '/api/database/health')
-        if skip or request.method == 'OPTIONS' or _initialized:
+        skip_paths = ('/api/health', '/health', '/api/database/health', '/database/health')
+        if request.path in skip_paths or request.method == 'OPTIONS' or _initialized:
             return None
         ensure_demo_database()
         conversations.initialize()
         _initialized = True
+
+    # --------------- Helper for Dual Route Registration ---------------
+    def route_dual(rule, **options):
+        """Register route both with and without /api prefix."""
+        def decorator(f):
+            api_rule = rule if rule.startswith('/api') else f'/api{rule}'
+            plain_rule = rule[4:] if rule.startswith('/api/') else rule
+            endpoint = options.pop('endpoint', None)
+            
+            app.add_url_rule(api_rule, endpoint=endpoint or f'{f.__name__}_api', view_func=f, **options)
+            if plain_rule != api_rule:
+                app.add_url_rule(plain_rule, endpoint=f'{f.__name__}_plain', view_func=f, **options)
+            return f
+        return decorator
 
     # --------------- Error handlers ---------------
 
@@ -98,7 +112,8 @@ def create_app():
 
     # --------------- API routes ---------------
 
-    @app.get('/api/health')
+    @route_dual('/api/health', methods=['GET'])
+
     def health():
         try:
             return jsonify(status='ok', service='QueryNova', runtime='vercel-python')
@@ -106,7 +121,7 @@ def create_app():
             app.logger.exception('Health check failed')
             return jsonify(error=True, message='QueryNova is temporarily unavailable.'), 503
 
-    @app.get('/api/database/health')
+    @route_dual('/api/database/health', methods=['GET'])
     def database_health():
         status = check_database()
         if not status['ok']:
@@ -114,29 +129,29 @@ def create_app():
             return jsonify(status='unavailable', database='unavailable', reason=status.get('reason')), 503
         return jsonify(status='ok', database='available', table_count=status['table_count'])
 
-    @app.get('/api/schema')
+    @route_dual('/api/schema', methods=['GET'])
     def schema():
         return jsonify(get_schema())
 
-    @app.post('/api/query')
+    @route_dual('/api/query', methods=['POST'])
     def query():
         body = request.get_json(silent=True) or {}
         sql = str(body.get('sql', '')).strip()
         return jsonify(execute_query(sql))
 
-    @app.post('/api/chart')
+    @route_dual('/api/chart', methods=['POST'])
     def chart():
         body = request.get_json(silent=True) or {}
         return jsonify(generate_chart(body.get('rows', []), body.get('question', '')))
 
-    @app.post('/api/flowchart')
+    @route_dual('/api/flowchart', methods=['POST'])
     def flowchart():
         body = request.get_json(silent=True) or {}
         kind = body.get('type', 'er')
         code = generate_order_flowchart() if kind == 'process' else generate_er_diagram(get_schema())
         return jsonify({'type': kind, 'code': code})
 
-    @app.post('/api/chat')
+    @route_dual('/api/chat', methods=['POST'])
     def chat():
         body = request.get_json(silent=True) or {}
         message = str(body.get('message', '')).strip()
@@ -166,29 +181,29 @@ def create_app():
 
         return jsonify(response), status_code
 
-    @app.get('/api/conversations')
+    @route_dual('/api/conversations', methods=['GET'])
     def list_conversations():
         return jsonify(conversations.list_conversations(request.args.get('search', '').strip()))
 
-    @app.post('/api/conversations')
+    @route_dual('/api/conversations', methods=['POST'])
     def create_conversation():
         body = request.get_json(silent=True) or {}
         title = body.get('title', 'New chat')
         return jsonify(conversations.create_conversation(title)), 201
 
-    @app.get('/api/conversations/<conversation_id>')
+    @route_dual('/api/conversations/<conversation_id>', methods=['GET'])
     def get_conversation(conversation_id):
         item = conversations.get_conversation(conversation_id)
         return (jsonify(item), 200) if item else (jsonify(error='Conversation not found'), 404)
 
-    @app.put('/api/conversations/<conversation_id>')
+    @route_dual('/api/conversations/<conversation_id>', methods=['PUT'])
     def update_conversation(conversation_id):
         body = request.get_json(silent=True) or {}
         title = body.get('title', '')
         item = conversations.update_conversation(conversation_id, title)
         return (jsonify(item), 200) if item else (jsonify(error='Conversation not found'), 404)
 
-    @app.delete('/api/conversations/<conversation_id>')
+    @route_dual('/api/conversations/<conversation_id>', methods=['DELETE'])
     def delete_conversation(conversation_id):
         success = conversations.delete_conversation(conversation_id)
         return ('', 204) if success else (jsonify(error='Conversation not found'), 404)
