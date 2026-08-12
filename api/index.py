@@ -1,4 +1,10 @@
-"""Vercel Python serverless entry point for the QueryNova Flask API."""
-from backend.app import app
+from flask import Flask, jsonify
 
-# Vercel imports this WSGI application directly. Do not call app.run() here.
+app = Flask(__name__)
+
+@app.get("/api/health")
+def health():
+    return jsonify({
+        "status": "ok",
+        "service": "QueryNova AI"
+    })
