@@ -33,7 +33,6 @@ def allowed_frontend_origins():
     """Read a comma-separated origin allow-list without trailing slashes."""
     configured = os.getenv('FRONTEND_URL', 'http://localhost:5173')
     origins = [origin.strip().rstrip('/') for origin in configured.split(',') if origin.strip()]
-    # Always allow the production frontend
     for always in [
         'https://querynova-frontend.vercel.app',
         'http://localhost:5173',
@@ -47,6 +46,8 @@ def allowed_frontend_origins():
 
 def create_app():
     app = Flask(__name__)
+
+    # --------------- CORS ---------------
     CORS(
         app,
         resources={r'/api/*': {
@@ -58,26 +59,35 @@ def create_app():
         supports_credentials=False
     )
 
+    @app.after_request
+    def add_cors_headers(response):
+        """Ensure CORS headers are always set — even on error responses."""
+        origin = request.headers.get('Origin', '')
+        if origin in allowed_frontend_origins():
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+            response.headers['Access-Control-Max-Age'] = '3600'
+        return response
+
+    # --------------- Lifecycle ---------------
+
     @app.before_request
     def initialize_runtime():
         global _initialized
-        health_paths = ('/api/health', '/api/database/health')
-        if request.path in health_paths or request.method == 'OPTIONS' or _initialized:
+        skip = request.path in ('/api/health', '/api/database/health')
+        if skip or request.method == 'OPTIONS' or _initialized:
             return None
         ensure_demo_database()
         conversations.initialize()
         _initialized = True
 
+    # --------------- Error handlers ---------------
+
     @app.errorhandler(Exception)
     def unhandled_error(error):
         if isinstance(error, HTTPException):
-            return jsonify(
-                error=True, code='HTTP_ERROR', message=error.description,
-                _debug_path=request.path,
-                _debug_url=request.url,
-                _debug_script=request.environ.get('SCRIPT_NAME', ''),
-                _debug_path_info=request.environ.get('PATH_INFO', ''),
-            ), error.code
+            return jsonify(error=True, code='HTTP_ERROR', message=error.description), error.code
         app.logger.exception('Unhandled API error')
         return jsonify(
             error=True,
@@ -85,6 +95,8 @@ def create_app():
             message='QueryNova backend encountered an internal error. Please try again.',
             details=str(error)
         ), 500
+
+    # --------------- API routes ---------------
 
     @app.get('/api/health')
     def health():
