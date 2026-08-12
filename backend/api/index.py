@@ -1,13 +1,9 @@
-"""Vercel serverless entry point.
+"""Vercel serverless entry point for QueryNova backend.
 
-Vercel's Python runtime may set SCRIPT_NAME based on the function's
-directory (e.g. SCRIPT_NAME="/api" for files under api/).  Flask
-matches routes against PATH_INFO only, so /api/* routes will 404 if
-the /api prefix is absorbed by SCRIPT_NAME.
-
-The _VercelPathFix middleware merges SCRIPT_NAME back into PATH_INFO
-so that Flask's url_map sees the full original request path.
+Normalizes SCRIPT_NAME and PATH_INFO variations from Vercel's Python runtime
+so that Flask routes matching /api/* function reliably across all serverless invokers.
 """
+import re
 import sys
 from pathlib import Path
 
@@ -18,8 +14,8 @@ if str(BACKEND_ROOT) not in sys.path:
 from app import app as _flask_app
 
 
-class _VercelPathFix:
-    """WSGI middleware: merge SCRIPT_NAME into PATH_INFO for Flask."""
+class PathNormalizer:
+    """WSGI middleware to normalize request paths for Flask routing."""
 
     __slots__ = ("_app",)
 
@@ -28,11 +24,25 @@ class _VercelPathFix:
 
     def __call__(self, environ, start_response):
         script = environ.get("SCRIPT_NAME", "")
-        if script:
-            environ["PATH_INFO"] = script + environ.get("PATH_INFO", "")
-            environ["SCRIPT_NAME"] = ""
+        path = environ.get("PATH_INFO", "")
+
+        # Combine script name and path info
+        combined = f"{script}{path}"
+
+        # Strip any leading Vercel entrypoint artifacts like /api/index.py or /api/index
+        combined = re.sub(r"^/api/index(\.py)?", "", combined)
+
+        # Collapse duplicate /api prefixes (e.g., /api/api/health -> /api/health)
+        combined = re.sub(r"^(?:/api)+", "/api", combined)
+
+        # Ensure path starts with /api
+        if not combined.startswith("/api"):
+            combined = "/api" + (combined if combined.startswith("/") else "/" + combined)
+
+        environ["PATH_INFO"] = combined
+        environ["SCRIPT_NAME"] = ""
         return self._app(environ, start_response)
 
 
-# Vercel discovers this module-level `app` variable.
-app = _VercelPathFix(_flask_app)
+# Vercel detects and executes this module-level `app` object.
+app = PathNormalizer(_flask_app)
