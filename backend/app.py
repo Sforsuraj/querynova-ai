@@ -71,7 +71,13 @@ def create_app():
     @app.errorhandler(Exception)
     def unhandled_error(error):
         if isinstance(error, HTTPException):
-            return jsonify(error=True, code='HTTP_ERROR', message=error.description), error.code
+            return jsonify(
+                error=True, code='HTTP_ERROR', message=error.description,
+                _debug_path=request.path,
+                _debug_url=request.url,
+                _debug_script=request.environ.get('SCRIPT_NAME', ''),
+                _debug_path_info=request.environ.get('PATH_INFO', ''),
+            ), error.code
         app.logger.exception('Unhandled API error')
         return jsonify(
             error=True,
