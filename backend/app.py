@@ -4,6 +4,7 @@ from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
 try:
     from backend.database.demo import ensure_demo_database
+    from backend.database.health import check_database
     from backend.tools.schema_tool import get_schema
     from backend.tools.query_tool import execute_query
     from backend.tools.chart_tool import generate_chart
@@ -12,6 +13,7 @@ try:
     from backend.database import conversations
 except ModuleNotFoundError:
     from database.demo import ensure_demo_database
+    from database.health import check_database
     from tools.schema_tool import get_schema
     from tools.query_tool import execute_query
     from tools.chart_tool import generate_chart
@@ -46,6 +48,13 @@ def create_app():
         except Exception:
             app.logger.exception('Health check failed')
             return jsonify(error=True, message='QueryNova is temporarily unavailable.'), 503
+    @app.get('/api/database/health')
+    def database_health():
+        status = check_database()
+        if not status['ok']:
+            app.logger.error('Database health check failed: %s', status['reason'])
+            return jsonify(status='unavailable', database='unavailable'), 503
+        return jsonify(status='ok', database='available', table_count=status['table_count'])
     @app.get('/api/schema')
     def schema(): return jsonify(get_schema())
     @app.post('/api/query')

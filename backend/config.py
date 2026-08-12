@@ -4,20 +4,22 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-ROOT = Path(__file__).resolve().parent
+BACKEND_ROOT = Path(__file__).resolve().parent
+# This database is a versioned, read-only demo asset.  It is deliberately
+# resolved from this module, never from the process working directory.
+DATABASE_PATH = BACKEND_ROOT / 'data' / 'ecommerce.db'
+# Backwards-compatible name for modules that import ROOT.
+ROOT = BACKEND_ROOT
+
 def database_url():
-    """Resolve SQLite paths from the repository, never from a developer machine."""
+    """Use the bundled SQLite demo database for every SQLite deployment."""
     configured = os.getenv('DATABASE_URL')
-    if not configured:
-        return f"sqlite:///{ROOT / 'database' / 'ecommerce.db'}"
-    prefix = 'sqlite:///'
-    if configured.startswith(prefix):
-        path = Path(configured[len(prefix):])
-        if not path.is_absolute() and str(path) != ':memory:':
-            project_path, backend_path = ROOT.parent / path, ROOT / path
-            resolved = backend_path if backend_path.exists() else project_path
-            return f"{prefix}{resolved.resolve()}"
-    return configured
+    # Keep support for an explicitly configured non-SQLite database during
+    # local development, but never allow a stale relative SQLite URL to point
+    # outside the Vercel backend project root.
+    if configured and not configured.startswith('sqlite'):
+        return configured
+    return f"sqlite:///{DATABASE_PATH.as_posix()}"
 
 DATABASE_URL = database_url()
 MAX_QUERY_ROWS = int(os.getenv('MAX_QUERY_ROWS', '500'))

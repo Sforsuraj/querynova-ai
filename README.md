@@ -22,7 +22,7 @@ backend/                  Independent Flask project
   api/[...path].py        Catch-all for /api/*
   requirements.txt
   vercel.json
-  database/ecommerce.db
+  data/ecommerce.db       Read-only bundled demo data
 ```
 
 ## Frontend deployment — querynova-frontend
@@ -53,7 +53,7 @@ OPENROUTER_SITE_URL=https://querynova-frontend.vercel.app
 FRONTEND_URL=https://querynova-frontend.vercel.app
 MAX_QUERY_ROWS=500
 QUERY_TIMEOUT_SECONDS=10
-DATABASE_URL=sqlite:///database/ecommerce.db
+DATABASE_URL=sqlite:///data/ecommerce.db
 ```
 
 5. Deploy and test `https://querynova-backend.vercel.app/api/health`.
@@ -88,12 +88,13 @@ Set `VITE_API_URL=http://localhost:8080` locally. The backend CORS allow-list is
 
 - Never add `OPENROUTER_API_KEY` or any `VITE_OPENROUTER_API_KEY` to the frontend.
 - `.env` files are ignored; `.env.example` contains placeholders only.
-- SQLite is packaged as a read-only sample. Vercel has no durable local filesystem, so persistent production chat history needs a hosted database.
+- The demo database is committed at `backend/data/ecommerce.db` and packaged with the backend function. It is read-only sample data; Vercel's serverless filesystem must not be used for persistent data.
+- Conversation history uses an in-memory store on Vercel so the API remains available, but it is cleared when the function instance is recycled. Durable production history requires an external persistent data store.
 - SQL is limited to a single read-only `SELECT` or `WITH` statement.
 
 ## API
 
-- `GET /api/health`, `GET /api/schema`
+- `GET /api/health`, `GET /api/database/health`, `GET /api/schema`
 - `POST /api/chat`, `/api/query`, `/api/chart`, `/api/flowchart`
 - `GET|POST /api/conversations`
 - `GET|PUT|DELETE /api/conversations/:id`

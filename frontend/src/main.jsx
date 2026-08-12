@@ -343,10 +343,10 @@ function App() {
       }
     })();
     axios
-      .get(API + "/health")
+      .get(API + "/database/health")
       .then((r) =>
         setHealth({
-          ok: r.data.database === "connected",
+          ok: r.data.database === "available",
           tables: r.data.table_count || 0,
         }),
       )

@@ -2,9 +2,9 @@ import os
 from pathlib import Path
 from sqlalchemy import create_engine, text
 try:
-    from backend.config import DATABASE_URL
+    from backend.config import DATABASE_PATH, DATABASE_URL
 except ModuleNotFoundError:
-    from config import DATABASE_URL
+    from config import DATABASE_PATH, DATABASE_URL
 
 DDL = '''
 CREATE TABLE categories (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
@@ -20,7 +20,7 @@ CREATE TABLE shipments (id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL, statu
 def ensure_demo_database():
     if not DATABASE_URL.startswith('sqlite'):
         return
-    path = Path(DATABASE_URL.replace('sqlite:///', ''))
+    path = DATABASE_PATH
     if path.exists(): return
     # The bundled database is read-only on Vercel. Do not seed or create files
     # in a serverless invocation if the packaged asset is missing.

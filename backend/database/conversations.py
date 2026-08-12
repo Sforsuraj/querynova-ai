@@ -7,13 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 try:
-    from backend.config import ROOT
+    from backend.config import BACKEND_ROOT
 except ModuleNotFoundError:
-    from config import ROOT
+    from config import BACKEND_ROOT
 
 # Never write user history to the Vercel filesystem. A warm function uses an
 # in-memory demo store; durable serverless history requires a hosted database.
-HISTORY_DB = ':memory:' if os.getenv('VERCEL') else str(Path(ROOT) / 'database' / 'querynova_history.db')
+HISTORY_DB = ':memory:' if os.getenv('VERCEL') else str(BACKEND_ROOT / 'database' / 'querynova_history.db')
 _memory_connection = None
 
 def now():
