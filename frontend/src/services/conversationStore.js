@@ -1,5 +1,7 @@
 import axios from 'axios';
-const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8080' : '');
+const API_URL = (import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8080' : ''))
+  .replace(/\/+$/, '')
+  .replace(/\/api$/, '');
 const API = `${API_URL}/api`;
 export const conversationApi = {
   list: search => axios.get(`${API}/conversations`, {params: search ? {search} : {}}).then(r => r.data),

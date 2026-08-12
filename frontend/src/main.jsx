@@ -25,7 +25,9 @@ import {
 import ChartRenderer from "./components/ChartRenderer";
 import { conversationApi } from "./services/conversationStore";
 import "./style.css";
-const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? "http://localhost:8080" : "");
+const API_URL = (import.meta.env.VITE_API_URL || (import.meta.env.DEV ? "http://localhost:8080" : ""))
+  .replace(/\/+$/, "")
+  .replace(/\/api$/, "");
 const API = `${API_URL}/api`;
 const prompts = [
   [

@@ -23,10 +23,18 @@ except ModuleNotFoundError:
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 _initialized = False
+
+
+def allowed_frontend_origins():
+    """Read a comma-separated origin allow-list without trailing slashes."""
+    configured = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+    origins = [origin.strip().rstrip('/') for origin in configured.split(',') if origin.strip()]
+    return origins or ['http://localhost:5173']
+
+
 def create_app():
     app = Flask(__name__)
-    # Production is same-origin (/api); CORS is only needed for local Vite.
-    CORS(app, resources={r'/api/*': {'origins': os.getenv('FRONTEND_URL', 'http://localhost:5173').split(',')}})
+    CORS(app, resources={r'/api/*': {'origins': allowed_frontend_origins()}})
     @app.before_request
     def initialize_runtime():
         global _initialized
