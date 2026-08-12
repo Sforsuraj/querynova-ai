@@ -5,10 +5,16 @@
   "outputDirectory": "frontend/dist",
   "functions": {
     "api/index.py": {
-      "includeFiles": "backend/database/ecommerce.db"
+      "includeFiles": [
+        "backend/**/*.py",
+        "backend/database/ecommerce.db"
+      ]
     },
     "api/[...path].py": {
-      "includeFiles": "backend/database/ecommerce.db"
+      "includeFiles": [
+        "backend/**/*.py",
+        "backend/database/ecommerce.db"
+      ]
     }
   }
 }
