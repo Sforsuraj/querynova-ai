@@ -1,7 +1,8 @@
 """Vercel serverless entry point for QueryNova backend.
 
-Normalizes SCRIPT_NAME and PATH_INFO variations from Vercel's Python runtime
-so that Flask routes matching /api/* function reliably across all serverless invokers.
+Normalizes request paths from Vercel's Python runtime and rewrite proxy headers
+(e.g., HTTP_X_MATCHED_PATH, HTTP_X_FORWARDED_PATH) so that Flask routes matching /api/*
+function reliably across all serverless invocations.
 """
 import re
 import sys
@@ -14,8 +15,8 @@ if str(BACKEND_ROOT) not in sys.path:
 from app import app as _flask_app
 
 
-class PathNormalizer:
-    """WSGI middleware to normalize request paths for Flask routing."""
+class VercelPathResolver:
+    """WSGI middleware to extract original request path from Vercel proxy headers."""
 
     __slots__ = ("_app",)
 
@@ -23,26 +24,39 @@ class PathNormalizer:
         self._app = wsgi_app
 
     def __call__(self, environ, start_response):
-        script = environ.get("SCRIPT_NAME", "")
-        path = environ.get("PATH_INFO", "")
+        # Vercel rewrites store the original request path in these headers
+        headers_to_check = [
+            "HTTP_X_MATCHED_PATH",
+            "HTTP_X_FORWARDED_PATH",
+            "HTTP_X_INITIAL_PATH",
+            "HTTP_X_INVOKE_PATH",
+            "HTTP_X_ORIGINAL_URI",
+            "HTTP_X_REWRITE_URL",
+        ]
 
-        # Combine script name and path info
-        combined = f"{script}{path}"
+        path = None
+        for header_name in headers_to_check:
+            val = environ.get(header_name, "").strip()
+            if val and not val.endswith("index.py"):
+                path = val
+                break
 
-        # Strip any leading Vercel entrypoint artifacts like /api/index.py or /api/index
-        combined = re.sub(r"^/api/index(\.py)?", "", combined)
+        if not path:
+            script = environ.get("SCRIPT_NAME", "")
+            path_info = environ.get("PATH_INFO", "")
+            path = f"{script}{path_info}"
 
-        # Collapse duplicate /api prefixes (e.g., /api/api/health -> /api/health)
-        combined = re.sub(r"^(?:/api)+", "/api", combined)
+        # Clean Vercel artifacts
+        path = re.sub(r"^/api/index(\.py)?", "", path)
+        path = re.sub(r"^(?:/api)+", "/api", path)
 
-        # Ensure path starts with /api
-        if not combined.startswith("/api"):
-            combined = "/api" + (combined if combined.startswith("/") else "/" + combined)
+        if not path.startswith("/api"):
+            path = "/api" + (path if path.startswith("/") else "/" + path)
 
-        environ["PATH_INFO"] = combined
+        environ["PATH_INFO"] = path
         environ["SCRIPT_NAME"] = ""
         return self._app(environ, start_response)
 
 
 # Vercel detects and executes this module-level `app` object.
-app = PathNormalizer(_flask_app)
+app = VercelPathResolver(_flask_app)
