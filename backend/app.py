@@ -33,23 +33,36 @@ def allowed_frontend_origins():
     """Read a comma-separated origin allow-list without trailing slashes."""
     configured = os.getenv('FRONTEND_URL', 'http://localhost:5173')
     origins = [origin.strip().rstrip('/') for origin in configured.split(',') if origin.strip()]
-    if 'https://querynova-frontend.vercel.app' not in origins:
-        origins.append('https://querynova-frontend.vercel.app')
-    return origins or ['http://localhost:5173', 'https://querynova-frontend.vercel.app']
+    # Always allow the production frontend
+    for always in [
+        'https://querynova-frontend.vercel.app',
+        'http://localhost:5173',
+        'http://localhost:3000',
+        'http://localhost:4173',
+    ]:
+        if always not in origins:
+            origins.append(always)
+    return origins
 
 
 def create_app():
     app = Flask(__name__)
     CORS(
         app,
-        resources={r'/api/*': {'origins': allowed_frontend_origins()}},
-        supports_credentials=True
+        resources={r'/api/*': {
+            'origins': allowed_frontend_origins(),
+            'allow_headers': ['Content-Type', 'Authorization', 'X-Requested-With'],
+            'methods': ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+            'max_age': 3600,
+        }},
+        supports_credentials=False
     )
 
     @app.before_request
     def initialize_runtime():
         global _initialized
-        if request.path == '/api/health' or _initialized:
+        health_paths = ('/api/health', '/api/database/health')
+        if request.path in health_paths or request.method == 'OPTIONS' or _initialized:
             return None
         ensure_demo_database()
         conversations.initialize()
