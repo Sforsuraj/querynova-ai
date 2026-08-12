@@ -1,6 +1,8 @@
 import json
-import re
+import logging
+import time
 from typing import Any
+
 try:
     from backend.llm.client import LLMClient, LLMServiceError
     from backend.llm.config import OpenRouterConfig
@@ -18,109 +20,292 @@ except ModuleNotFoundError:
     from tools.query_tool import execute_query
     from tools.schema_tool import get_schema
 
+logger = logging.getLogger(__name__)
+
 TOOL_DEFINITIONS = [
-    {'type':'function','function':{'name':'get_schema','description':'Retrieve the actual database schema before database analysis.','parameters':{'type':'object','properties':{},'additionalProperties':False}}},
-    {'type':'function','function':{'name':'execute_query','description':'Run one safe read-only SQL SELECT/WITH query against the database.','parameters':{'type':'object','properties':{'sql':{'type':'string'}},'required':['sql'],'additionalProperties':False}}},
-    {'type':'function','function':{'name':'generate_chart','description':'Create structured chart metadata from the latest query result.','parameters':{'type':'object','properties':{'question':{'type':'string'}},'additionalProperties':False}}},
-    {'type':'function','function':{'name':'generate_flowchart','description':'Create an ER diagram or an order process flowchart.','parameters':{'type':'object','properties':{'kind':{'type':'string','enum':['er','process']}},'required':['kind'],'additionalProperties':False}}},
-    {'type':'function','function':{'name':'explain_data','description':'Create grounded insights from the latest query result.','parameters':{'type':'object','properties':{'question':{'type':'string'},'mode':{'type':'string','enum':['simple','technical','executive']}},'additionalProperties':False}}},
+    {
+        'type': 'function',
+        'function': {
+            'name': 'execute_query',
+            'description': 'Run one safe read-only SQL SELECT or WITH query against the SQLite e-commerce database.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'sql': {
+                        'type': 'string',
+                        'description': 'Valid read-only SQLite query. Always use correct table and column names.'
+                    }
+                },
+                'required': ['sql'],
+                'additionalProperties': False
+            }
+        }
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'get_schema',
+            'description': 'Retrieve detailed database schema definition including column data types and foreign key links.',
+            'parameters': {'type': 'object', 'properties': {}, 'additionalProperties': False}
+        }
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'generate_chart',
+            'description': 'Create chart visualization metadata from executed query results.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'question': {'type': 'string'},
+                    'preferred': {'type': 'string', 'enum': ['bar', 'line', 'pie', 'scatter']}
+                },
+                'additionalProperties': False
+            }
+        }
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'generate_flowchart',
+            'description': 'Create Mermaid ER diagram or order lifecycle process flowchart.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'kind': {'type': 'string', 'enum': ['er', 'process']}
+                },
+                'required': ['kind'],
+                'additionalProperties': False
+            }
+        }
+    }
 ]
 
+SYSTEM_PROMPT_TEMPLATE = """You are QueryNova, an expert AI SQL and Data Analytics assistant.
+You assist users by querying a read-only e-commerce SQLite database and explaining results clearly.
+
+Database Schema Overview:
+- categories: (id, name, description)
+- customers: (id, name, email, phone, city, state, country, created_at)
+- inventory: (id, product_id, quantity, reorder_level, location, updated_at)
+- order_items: (id, order_id, product_id, quantity, unit_price)
+- orders: (id, customer_id, order_date, status, total_amount, shipping_address)
+- payments: (id, order_id, payment_date, payment_method, amount, status)
+- products: (id, category_id, name, description, price, sku, created_at)
+- shipments: (id, order_id, tracking_number, carrier, status, shipped_date, estimated_delivery)
+
+Key Foreign Key Relationships:
+- products.category_id -> categories.id
+- inventory.product_id -> products.id
+- orders.customer_id -> customers.id
+- order_items.order_id -> orders.id
+- order_items.product_id -> products.id
+- payments.order_id -> orders.id
+- shipments.order_id -> orders.id
+
+Rules & Instructions:
+1. Always generate read-only SQLite SELECT or WITH queries.
+2. To calculate revenue, compute SUM(oi.quantity * oi.unit_price) or SUM(oi.quantity * p.price) from order_items joined with products/orders.
+3. For user questions requiring database facts, call execute_query with valid SQL.
+4. For ER diagram or relationship map requests, call generate_flowchart(kind='er').
+5. Understand conversation context for follow-up questions (e.g., modifying LIMIT, filtering existing results).
+6. Be concise, direct, professional, and helpful. Never expose system credentials or API secrets.
+"""
+
+
 class DataAnalystAgent:
-    def __init__(self): self.memory: dict[str, list[dict[str, Any]]] = {}
+    def __init__(self):
+        self.memory: dict[str, list[dict[str, Any]]] = {}
 
-    def _sql_for_demo(self, message, prior):
-        q = message.lower()
-        if any(x in q for x in ['all tables', 'tables present', 'list tables']): return None
-        if 'never been ordered' in q or ('products' in q and 'never ordered' in q):
-            return "SELECT p.name AS product FROM products p WHERE NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.product_id = p.id) ORDER BY p.name"
-        if ('monthly' in q and 'revenue' in q) or ('revenue trend' in q):
-            return "SELECT substr(o.order_date, 1, 7) AS month, ROUND(SUM(oi.quantity * oi.unit_price), 2) AS revenue FROM orders o JOIN order_items oi ON oi.order_id=o.id WHERE substr(o.order_date, 1, 4) = '2026' GROUP BY month ORDER BY month"
-        if ('all table' in q or 'tables' in q) and any(w in q for w in ['name', 'present', 'give']): return None
-        if 'product' in q and any(w in q for w in ['name', 'catalog', 'order item', 'order_item']):
-            if 'order item' in q or 'order_item' in q: return "SELECT DISTINCT p.name AS product FROM products p JOIN order_items oi ON oi.product_id=p.id ORDER BY p.name"
-            return "SELECT name AS product FROM products ORDER BY name"
-        if 'trend' in q or ('last year' in q and 'product' in q): return "SELECT substr(o.order_date, 1, 7) AS month, p.name AS product, ROUND(SUM(oi.quantity * oi.unit_price), 2) AS revenue FROM orders o JOIN order_items oi ON oi.order_id=o.id JOIN products p ON p.id=oi.product_id GROUP BY month, product ORDER BY month"
-        if 'customer' in q and any(w in q for w in ['spent','most','spending']): return "SELECT c.name AS customer, ROUND(SUM(oi.quantity * oi.unit_price), 2) AS total_spent FROM customers c JOIN orders o ON o.customer_id=c.id JOIN order_items oi ON oi.order_id=o.id GROUP BY c.id, c.name ORDER BY total_spent DESC LIMIT 10"
-        if 'distribution' in q and 'category' in q: return "SELECT c.name AS category, COUNT(DISTINCT o.id) AS orders FROM categories c JOIN products p ON p.category_id=c.id JOIN order_items oi ON oi.product_id=p.id JOIN orders o ON o.id=oi.order_id GROUP BY c.name ORDER BY orders DESC"
-        if any(w in q for w in ['relationship','correlation','price and quantity']): return "SELECT p.price AS price, SUM(oi.quantity) AS quantity_sold FROM products p JOIN order_items oi ON oi.product_id=p.id GROUP BY p.id, p.price ORDER BY p.price"
-        if ('top' in q and 'product' in q) or 'revenue' in q:
-            n = (re.search(r'top\s+(\d+)', q) or [None, '5'])[1]
-            period = " WHERE o.order_date >= '2026-04-01' AND o.order_date < '2026-07-01'" if 'quarter' in q else ''
-            return f"SELECT p.name AS product, ROUND(SUM(oi.quantity * oi.unit_price), 2) AS revenue FROM products p JOIN order_items oi ON oi.product_id=p.id JOIN orders o ON o.id=oi.order_id{period} GROUP BY p.id, p.name ORDER BY revenue DESC LIMIT {n}"
-        return None
+    def _tool_registry(self, state: dict[str, Any]):
+        def run_query(sql: str = ''):
+            if not isinstance(sql, str) or not sql.strip():
+                return {'success': False, 'error': 'sql query string is required'}
+            state['sql'] = sql
+            state['result'] = execute_query(sql)
+            return state['result']
 
-    def _tool_registry(self, state):
-        def run_query(sql=''):
-            if not isinstance(sql, str): return {'success':False,'error':'sql must be a string'}
-            state['sql'] = sql; state['result'] = execute_query(sql); return state['result']
-        def chart(question=''):
-            result = state.get('result') or {}; state['visualization'] = generate_chart(result.get('rows', []), question); return state['visualization'] or {'error':'No query rows available'}
-        def flowchart(kind):
-            if kind == 'er': state['diagram']={'type':'er','code':generate_er_diagram(get_schema())}
-            elif kind == 'process': state['diagram']={'type':'flowchart','code':generate_order_flowchart()}
-            else: return {'error':'kind must be er or process'}
-            return state['diagram']
-        def explain(question='', mode='simple'):
-            result=state.get('result') or {}; state['insights']=explain_data(question, state.get('sql',''), result, mode); return state['insights']
-        return {'get_schema': lambda: get_schema(), 'execute_query': run_query, 'generate_chart': chart, 'generate_flowchart': flowchart, 'explain_data': explain}
+        def schema_call():
+            return get_schema()
 
-    def _openrouter_response(self, message, conversation_id, mode, prior_messages=None):
-        config=OpenRouterConfig.from_environment()
-        if not config.api_key: return None
-        state={'sql':None,'result':None,'visualization':None,'diagram':None,'insights':None}; registry=self._tool_registry(state); calls=[]
-        previous = (prior_messages or [])[-8:]
-        context='\n'.join(f"{'User' if item.get('role') == 'user' else 'Assistant'}: {item.get('content','')}" for item in previous)
-        messages=[{'role':'system','content':'You are QueryNova, a senior AI data analyst. Prioritize correctness over confidence. Internally classify the request, then use get_schema when schema facts are needed and execute_query before making any database claim. Never invent values, relationships, percentages, trends, causes, or missing data. SQL must be safe and read-only. Answer naturally: be concise for simple lookups; for analysis give a short summary, supporting table where useful, grounded key insights, and a chart only when it materially improves understanding. State limitations when evidence is insufficient. Maintain context only from the current conversation. Do not expose hidden reasoning or tool internals.'}, {'role':'user','content':(f'Prior context:\n{context}\n\n' if context else '') + message}]
-        try:
-            client=LLMClient(config)
-            for _ in range(6):
-                completion=client.complete(messages, TOOL_DEFINITIONS); choice=completion.choices[0].message; tool_calls=choice.tool_calls or []
-                if not tool_calls:
-                    return {'conversation_id':conversation_id,'message':choice.content or 'I completed the analysis.','sql':state['sql'],'query_result':state['result'],'visualization':state['visualization'],'diagram':state['diagram'],'insights':state['insights'],'tool_calls':calls,'model':getattr(completion,'model',None)}
-                messages.append({'role':'assistant','content':choice.content,'tool_calls':[call.model_dump() for call in tool_calls]})
-                for call in tool_calls:
-                    name=call.function.name
-                    try: args=json.loads(call.function.arguments or '{}')
-                    except json.JSONDecodeError: args={}; output={'error':'Tool arguments were not valid JSON.'}
-                    else:
-                        handler=registry.get(name)
-                        if not handler: output={'error':'Unknown tool requested.'}
-                        else:
-                            try: output=handler(**args)
-                            except (TypeError, ValueError) as exc: output={'error':f'Invalid arguments: {exc}'}
-                    calls.append({'tool':name})
-                    messages.append({'role':'tool','tool_call_id':call.id,'content':json.dumps(output, default=str)})
-            raise LLMServiceError('The AI agent reached its tool-call limit. Please try a more specific request.')
-        except LLMServiceError as exc:
-            # The local schema-aware paths remain usable during provider outages.
-            # Unknown requests receive a safe, friendly fallback below.
-            return None
+        def chart_call(question: str = '', preferred: str = None):
+            result = state.get('result') or {}
+            rows = result.get('rows', [])
+            state['visualization'] = generate_chart(rows, question, preferred)
+            return state['visualization'] or {'error': 'No query rows available for chart.'}
 
-    def respond(self, message, conversation_id, mode='simple', prior_messages=None):
-        history=self.memory.setdefault(conversation_id, []); response=self._openrouter_response(message, conversation_id, mode, prior_messages)
-        if response is None:
-            schema=get_schema(); q=message.lower(); calls=[{'tool':'get_schema'}]; response={'conversation_id':conversation_id,'message':'','sql':None,'query_result':None,'visualization':None,'diagram':None,'insights':None,'tool_calls':calls}
-            if any(x in q for x in ['er diagram','entity relationship']): response.update(message='Here is the database relationship map.',diagram={'type':'er','code':generate_er_diagram(schema)}); calls.append({'tool':'generate_flowchart','kind':'er'})
-            elif any(x in q for x in ['flowchart','order flow','order moves','order lifecycle']): response.update(message='Here is the order lifecycle.',diagram={'type':'flowchart','code':generate_order_flowchart()}); calls.append({'tool':'generate_flowchart','kind':'process'})
-            elif 'related to' in q or ('tables' in q and 'customer' in q):
-                related=[r for r in schema['relationships'] if r['from_table']=='customers' or r['references_table']=='customers']; response['message']='Customers is directly related to: '+(', '.join(f"{r['from_table']} via {', '.join(r['columns'])}" for r in related) or 'No direct relationships')+'.'
-            elif ('all table' in q or 'tables' in q) and any(w in q for w in ['name', 'present', 'give', 'list']):
-                tables=list(schema['tables']); response['message']='### Database tables\n\nYour database contains **'+str(len(tables))+' tables**:\n\n`'+'` · `'.join(tables)+'`'
+        def flowchart_call(kind: str):
+            if kind == 'er':
+                state['diagram'] = {'type': 'er', 'code': generate_er_diagram(get_schema())}
+            elif kind == 'process':
+                state['diagram'] = {'type': 'flowchart', 'code': generate_order_flowchart()}
             else:
-                sql=self._sql_for_demo(message, history[-1] if history else None)
-                if not sql: response['message']='### AI service temporarily unavailable\n\nI can still help with the included database queries, but open-ended analysis is unavailable right now. Please try again in a moment.' if OpenRouterConfig.from_environment().api_key else 'Configure OPENROUTER_API_KEY for open-ended analysis, or try an included demo prompt.'
-                else:
-                    result=execute_query(sql); response.update(sql=sql,query_result=result); calls.append({'tool':'execute_query','sql':sql})
-                    if result['success']:
-                        rows=result['rows']; response.update(visualization=generate_chart(rows,message),insights=explain_data(message,sql,result,mode));
-                        if not rows: response['message']='### No matching data\n\nI couldn\'t find any records matching that request. Try broadening the date range or changing the filter.'; response['visualization']=None
-                        elif len(rows[0]) == 1:
-                            label=next(iter(rows[0])); values=[str(r[label]) for r in rows]; title='Products with orders' if 'order item' in q else ('Products in your catalog' if 'product' in q else 'Results')
-                            response['message']=f'### {title}\n\nYou have **{len(values)}** results:\n\n'+'\n'.join(f'{i}. {value}' for i,value in enumerate(values,1))
-                        else: response['message']=response['insights']['summary']
-                        calls.extend([{'tool':'generate_chart'},{'tool':'explain_data'}])
-                    else: response['message']='I could not run that read-only query. Please try a different phrasing.'
-        history.append({'question':message,'response':response}); self.memory[conversation_id]=history[-12:]; return response
+                return {'error': 'kind must be er or process'}
+            return state['diagram']
 
-agent=DataAnalystAgent()
+        return {
+            'execute_query': run_query,
+            'get_schema': schema_call,
+            'generate_chart': chart_call,
+            'generate_flowchart': flowchart_call,
+        }
+
+    def respond(self, message: str, conversation_id: str, mode: str = 'simple', prior_messages: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        started = time.perf_counter()
+        config = OpenRouterConfig.from_environment()
+
+        if not config.api_key:
+            err = LLMServiceError(
+                message='OpenRouter API key is missing on the backend. Please configure OPENROUTER_API_KEY.',
+                code='MISSING_API_KEY',
+                details='OPENROUTER_API_KEY is not set.'
+            )
+            return {
+                'error': True,
+                'code': err.code,
+                'message': err.message,
+                'details': err.details,
+                'conversation_id': conversation_id,
+                'sql': None,
+                'query_result': None,
+                'visualization': None,
+                'diagram': None,
+                'insights': None,
+                'tool_calls': []
+            }
+
+        state: dict[str, Any] = {
+            'sql': None,
+            'result': None,
+            'visualization': None,
+            'diagram': None,
+            'insights': None
+        }
+        registry = self._tool_registry(state)
+        executed_calls: list[dict[str, Any]] = []
+
+        # Build message payload including conversation history
+        messages: list[dict[str, Any]] = [{'role': 'system', 'content': SYSTEM_PROMPT_TEMPLATE}]
+        if prior_messages:
+            for item in prior_messages[-10:]:
+                role = item.get('role')
+                content = item.get('content')
+                if role in ('user', 'assistant') and content:
+                    messages.append({'role': role, 'content': content})
+
+        messages.append({'role': 'user', 'content': message})
+
+        try:
+            client = LLMClient(config)
+            for iteration in range(3):
+                logger.info('LLM completion request iteration=%d conversation_id=%s', iteration + 1, conversation_id)
+                completion = client.complete(messages, TOOL_DEFINITIONS)
+                choice = completion.choices[0].message
+                tool_calls = choice.tool_calls or []
+
+                logger.info('LLM response received iteration=%d tool_calls_count=%d', iteration + 1, len(tool_calls))
+
+                if not tool_calls:
+                    # Final response received
+                    content_text = choice.content or 'Analysis complete.'
+
+                    # If SQL query was executed during tool calls, attach automatic chart and insights
+                    if state['result'] and state['result'].get('success'):
+                        rows = state['result'].get('rows', [])
+                        if not state['visualization'] and rows:
+                            state['visualization'] = generate_chart(rows, message)
+                        if not state['insights'] and rows:
+                            state['insights'] = explain_data(message, state['sql'] or '', state['result'], mode)
+
+                    return {
+                        'conversation_id': conversation_id,
+                        'message': content_text,
+                        'sql': state['sql'],
+                        'query_result': state['result'],
+                        'visualization': state['visualization'],
+                        'diagram': state['diagram'],
+                        'insights': state['insights'],
+                        'tool_calls': executed_calls,
+                        'model': getattr(completion, 'model', config.model)
+                    }
+
+                # Append assistant tool call request message
+                messages.append({
+                    'role': 'assistant',
+                    'content': choice.content,
+                    'tool_calls': [call.model_dump() for call in tool_calls]
+                })
+
+                for call in tool_calls:
+                    name = call.function.name
+                    executed_calls.append({'tool': name})
+                    try:
+                        args = json.loads(call.function.arguments or '{}')
+                    except json.JSONDecodeError:
+                        args = {}
+                        output = {'error': 'Tool arguments were invalid JSON.'}
+                    else:
+                        handler = registry.get(name)
+                        if not handler:
+                            output = {'error': f'Unknown tool {name}.'}
+                        else:
+                            try:
+                                logger.info('Executing tool=%s args=%s', name, args)
+                                output = handler(**args)
+                            except Exception as exc:
+                                logger.exception('Tool execution error tool=%s: %s', name, exc)
+                                output = {'error': f'Tool error: {str(exc)}'}
+
+                    messages.append({
+                        'role': 'tool',
+                        'tool_call_id': call.id,
+                        'content': json.dumps(output, default=str)
+                    })
+
+            # If tool call loop limit reached
+            return {
+                'conversation_id': conversation_id,
+                'message': 'The AI agent reached maximum tool execution iterations.',
+                'sql': state['sql'],
+                'query_result': state['result'],
+                'visualization': state['visualization'],
+                'diagram': state['diagram'],
+                'insights': state['insights'],
+                'tool_calls': executed_calls
+            }
+
+        except LLMServiceError as exc:
+            logger.error('LLMServiceError in respond: code=%s message=%s', exc.code, exc.message)
+            return {
+                'error': True,
+                'code': exc.code,
+                'message': exc.message,
+                'details': exc.details,
+                'conversation_id': conversation_id,
+                'sql': state['sql'],
+                'query_result': state['result'],
+                'visualization': state['visualization'],
+                'diagram': state['diagram'],
+                'insights': state['insights'],
+                'tool_calls': executed_calls
+            }
+        except Exception as exc:
+            logger.exception('Unhandled exception in agent respond: %s', exc)
+            return {
+                'error': True,
+                'code': 'UNHANDLED_AGENT_ERROR',
+                'message': 'An unexpected error occurred while processing your request.',
+                'details': str(exc),
+                'conversation_id': conversation_id,
+                'sql': None,
+                'query_result': None,
+                'visualization': None,
+                'diagram': None,
+                'insights': None,
+                'tool_calls': []
+            }
+        finally:
+            logger.info('Agent respond total_ms=%.1f', (time.perf_counter() - started) * 1000)
+
+
+agent = DataAnalystAgent()

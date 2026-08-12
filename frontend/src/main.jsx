@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import axios from "axios";
 import ReactMarkdown from "react-markdown";
 import mermaid from "mermaid";
 import {
@@ -21,14 +20,13 @@ import {
   MoreHorizontal,
   RotateCcw,
   Download,
+  Database,
 } from "lucide-react";
 import ChartRenderer from "./components/ChartRenderer";
+import { api, apiUrl } from "./api/client";
 import { conversationApi } from "./services/conversationStore";
 import "./style.css";
-const API_URL = (import.meta.env.VITE_API_URL || (import.meta.env.DEV ? "http://localhost:8080" : ""))
-  .replace(/\/+$/, "")
-  .replace(/\/api$/, "");
-const API = `${API_URL}/api`;
+
 const prompts = [
   [
     "Sales performance",
@@ -39,14 +37,15 @@ const prompts = [
   ["Explore database", "Draw me the ER diagram for this database.", Network],
   ["Revenue trends", "Show monthly revenue for this year.", BarChart3],
 ];
+
 const format = (k, v) => {
   if (v == null) return "—";
-  if (typeof v !== "number") return v;
+  if (typeof v !== "number") return String(v);
   if (/(revenue|spent|amount|price|total)/i.test(k))
     return new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: "USD",
-      maximumFractionDigits: 0,
+      maximumFractionDigits: 2,
     }).format(v);
   if (/percent|rate|share/i.test(k) && v >= 0 && v <= 1)
     return new Intl.NumberFormat("en-US", {
@@ -58,28 +57,30 @@ const format = (k, v) => {
     maximumFractionDigits: 2,
   }).format(v);
 };
+
 const normalize = (m) => ({
   ...m,
   queryResult: m.queryResult ?? m.query_result ?? null,
   toolCalls: m.toolCalls ?? m.tool_calls ?? [],
   sql: m.sql || null,
 });
+
 function ResultTable({ result }) {
   if (!result?.rows?.length) return null;
-  let cols = result.columns || Object.keys(result.rows[0]),
-    download = () => {
-      let text = [
-          cols.join(","),
-          ...result.rows.map((r) =>
-            cols.map((c) => JSON.stringify(r[c] ?? "")).join(","),
-          ),
-        ].join("\n"),
-        a = document.createElement("a");
-      a.href = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
-      a.download = "querynova-results.csv";
-      a.click();
-      URL.revokeObjectURL(a.href);
-    };
+  const cols = result.columns || Object.keys(result.rows[0]);
+  const download = () => {
+    const text = [
+      cols.join(","),
+      ...result.rows.map((r) =>
+        cols.map((c) => JSON.stringify(r[c] ?? "")).join(",")
+      ),
+    ].join("\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
+    a.download = "querynova-results.csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
   return (
     <section className="result-card">
       <div className="card-top">
@@ -117,14 +118,16 @@ function ResultTable({ result }) {
     </section>
   );
 }
+
 function Diagram({ diagram }) {
-  let ref = useRef();
+  const ref = useRef();
   useEffect(() => {
-    if (diagram)
+    if (diagram && diagram.code) {
       mermaid
-        .render(`nova-${crypto.randomUUID()}`, diagram.code)
+        .render(`querynova-${crypto.randomUUID()}`, diagram.code)
         .then((x) => ref.current && (ref.current.innerHTML = x.svg))
         .catch(() => ref.current && (ref.current.textContent = diagram.code));
+    }
   }, [diagram]);
   return (
     diagram && (
@@ -132,7 +135,7 @@ function Diagram({ diagram }) {
         <div className="card-top">
           <div>
             <Network size={16} />
-            <b>{diagram.type === "er" ? "Database map" : "Process flow"}</b>
+            <b>{diagram.type === "er" ? "Entity-Relationship Map" : "Process Flow"}</b>
           </div>
         </div>
         <div ref={ref} />
@@ -140,8 +143,9 @@ function Diagram({ diagram }) {
     )
   );
 }
+
 function SQL({ sql }) {
-  let [c, setC] = useState(false);
+  const [copied, setCopied] = useState(false);
   if (!sql) return null;
   return (
     <details className="sql">
@@ -151,19 +155,23 @@ function SQL({ sql }) {
       <div className="sql-body">
         <button
           onClick={() =>
-            navigator.clipboard?.writeText(sql).then(() => setC(true))
+            navigator.clipboard?.writeText(sql).then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 2000);
+            })
           }
         >
-          {c ? <Check size={14} /> : <Copy size={14} />} {c ? "Copied" : "Copy"}
+          {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? "Copied" : "Copy"}
         </button>
         <pre>{sql}</pre>
         <small>
-          <Check size={13} /> Read-only query
+          <Check size={13} /> Verified read-only query
         </small>
       </div>
     </details>
   );
 }
+
 function Insights({ data }) {
   if (!data?.key_insights?.length) return null;
   return (
@@ -182,15 +190,18 @@ function Insights({ data }) {
     </section>
   );
 }
+
 function Message({ m, retry, regenerate }) {
-  if (m.role === "user")
+  if (m.role === "user") {
     return (
       <article className="message user">
         <div className="user-label">You</div>
         <div className="user-bubble">{m.content}</div>
       </article>
     );
-  if (m.failed)
+  }
+
+  if (m.failed) {
     return (
       <article className="message ai">
         <div className="ai-label">
@@ -199,15 +210,20 @@ function Message({ m, retry, regenerate }) {
         <div className="error">
           <AlertTriangle />
           <div>
-            <b>Something went wrong while generating the response.</b>
+            <b>QueryNova Error</b>
             <p>{m.content}</p>
-            <button onClick={() => retry(m)}>
-              <RotateCcw size={14} /> Retry
-            </button>
+            {m.errorDetails && <small className="muted">{m.errorDetails}</small>}
+            {retry && (
+              <button onClick={() => retry(m)} style={{ marginTop: "8px" }}>
+                <RotateCcw size={14} /> Retry
+              </button>
+            )}
           </div>
         </div>
       </article>
     );
+  }
+
   return (
     <article className="message ai">
       <div className="ai-label">
@@ -236,31 +252,43 @@ function Message({ m, retry, regenerate }) {
     </article>
   );
 }
+
 function Explorer() {
-  let [s, setS] = useState(null),
-    [open, setOpen] = useState(null);
+  const [schema, setSchema] = useState(null);
+  const [openTable, setOpenTable] = useState(null);
+  const [loading, setLoading] = useState(true);
+
   useEffect(() => {
-    axios
-      .get(API + "/schema")
-      .then((x) => setS(x.data))
-      .catch(() => {});
+    api
+      .get(apiUrl("/api/schema"))
+      .then((res) => {
+        setSchema(res.data);
+        setLoading(false);
+      })
+      .catch((err) => {
+        console.error("Failed to load database schema:", err);
+        setLoading(false);
+      });
   }, []);
+
   return (
     <section className="explorer">
-      <p>DATABASE</p>
-      {s ? (
-        Object.entries(s.tables).map(([n, t]) => (
-          <div key={n}>
-            <button onClick={() => setOpen(open === n ? null : n)}>
+      <p>DATABASE SCHEMA</p>
+      {loading ? (
+        <span className="muted">Loading schema…</span>
+      ) : schema?.tables ? (
+        Object.entries(schema.tables).map(([tableName, tableData]) => (
+          <div key={tableName}>
+            <button onClick={() => setOpenTable(openTable === tableName ? null : tableName)}>
               <ChevronDown size={14} />
-              {n}
+              {tableName}
             </button>
-            {open === n && (
+            {openTable === tableName && (
               <ul>
-                {Object.entries(t.columns).map(([k, v]) => (
-                  <li key={k}>
-                    <span>{k}</span>
-                    <em>{v}</em>
+                {Object.entries(tableData.columns).map(([colName, colType]) => (
+                  <li key={colName}>
+                    <span>{colName}</span>
+                    <em>{colType}</em>
                   </li>
                 ))}
               </ul>
@@ -268,21 +296,22 @@ function Explorer() {
           </div>
         ))
       ) : (
-        <span className="muted">Loading schema…</span>
+        <span className="muted">Schema unavailable</span>
       )}
     </section>
   );
 }
+
 function groups(items) {
-  let t = new Date();
+  const t = new Date();
   t.setHours(0, 0, 0, 0);
-  let y = new Date(t);
+  const y = new Date(t);
   y.setDate(t.getDate() - 1);
-  let w = new Date(t);
+  const w = new Date(t);
   w.setDate(t.getDate() - 7);
-  let out = { Today: [], Yesterday: [], "Previous 7 days": [], Older: [] };
+  const out = { Today: [], Yesterday: [], "Previous 7 days": [], Older: [] };
   items.forEach((c) => {
-    let d = new Date(c.updatedAt);
+    const d = new Date(c.updatedAt || c.createdAt);
     out[
       d >= t
         ? "Today"
@@ -295,161 +324,168 @@ function groups(items) {
   });
   return out;
 }
+
 function App() {
-  let [conversations, setConversations] = useState([]),
-    [activeId, setActiveId] = useState(null),
-    [input, setInput] = useState(""),
-    [loading, setLoading] = useState(false),
-    [notice, setNotice] = useState(""),
-    [mobile, setMobile] = useState(false),
-    [search, setSearch] = useState(""),
-    [health, setHealth] = useState({ ok: false, tables: 0 });
-  let active = conversations.find((c) => c.id === activeId);
-  let change = (id, patch) =>
+  const [conversations, setConversations] = useState([]);
+  const [activeId, setActiveId] = useState(null);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [mobile, setMobile] = useState(false);
+  const [search, setSearch] = useState("");
+  const [health, setHealth] = useState({ loading: true, ok: false, tables: 0 });
+
+  const active = conversations.find((c) => c.id === activeId);
+
+  const updateConversationState = (id, patch) =>
     setConversations((all) =>
-      all.map((c) => (c.id === id ? { ...c, ...patch } : c)),
+      all.map((c) => (c.id === id ? { ...c, ...patch } : c))
     );
+
   async function select(id) {
     setActiveId(id);
     setMobile(false);
     setNotice("");
     try {
-      let c = await conversationApi.get(id);
-      change(id, { ...c, messages: c.messages.map(normalize) });
+      const c = await conversationApi.get(id);
+      updateConversationState(id, { ...c, messages: (c.messages || []).map(normalize) });
     } catch {
       setNotice("Couldn’t load this conversation.");
     }
   }
+
   async function newChat() {
     if (loading) return;
     try {
-      let c = await conversationApi.create();
-      setConversations((all) => [c, ...all]);
+      const c = await conversationApi.create();
+      setConversations((all) => [c, ...all.filter((x) => x.id !== c.id)]);
       setActiveId(c.id);
       setNotice("");
     } catch {
       setNotice("Unable to create a new conversation.");
     }
   }
+
   useEffect(() => {
     (async () => {
       try {
-        let list = await conversationApi.list();
+        const list = await conversationApi.list();
         setConversations(list);
-        let saved = localStorage.getItem("querynova_active_conversation");
-        let target = list.find((x) => x.id === saved) || list[0];
-        if (target) select(target.id);
-        else newChat();
+        const saved = localStorage.getItem("querynova-active-conversation");
+        const target = list.find((x) => x.id === saved) || list[0];
+        if (target) {
+          select(target.id);
+        } else {
+          newChat();
+        }
       } catch {
-        setNotice("Couldn’t load conversations.");
+        setNotice("Couldn’t load conversation history.");
       }
     })();
-    axios
-      .get(API + "/database/health")
-      .then((r) =>
+
+    setHealth({ loading: true, ok: false, tables: 0 });
+    api
+      .get(apiUrl("/api/database/health"))
+      .then((r) => {
+        const isOk = r.data.status === "ok" && r.data.database === "available";
         setHealth({
-          ok: r.data.database === "available",
-          tables: r.data.table_count || 0,
-        }),
-      )
-      .catch(() => setHealth({ ok: false, tables: 0 }));
+          loading: false,
+          ok: isOk,
+          tables: r.data.table_count || 8,
+        });
+      })
+      .catch((err) => {
+        console.error("Database health check error:", err);
+        setHealth({ loading: false, ok: false, tables: 0 });
+      });
   }, []);
+
   useEffect(() => {
-    if (activeId)
-      localStorage.setItem("querynova_active_conversation", activeId);
+    if (activeId) {
+      localStorage.setItem("querynova-active-conversation", activeId);
+    }
   }, [activeId]);
-  async function send(text = input, failedId) {
-    if (!text.trim() || loading || !active) return;
-    let snapshot = active.messages || [];
+
+  async function send(text = input) {
+    const messageText = text.trim();
+    if (!messageText || loading || !active) return;
+
     setLoading(true);
     setNotice("");
-    if (failedId)
-      change(active.id, {
-        messages: snapshot.filter((m) => m.id !== failedId),
-      });
-    else
-      change(active.id, {
-        messages: [
-          ...snapshot,
-          { id: `pending-${crypto.randomUUID()}`, role: "user", content: text },
-        ],
-      });
     setInput("");
+
     try {
-      let r = await conversationApi.send(active.id, text),
-        u = normalize(r.user_message),
-        a = normalize(r.message),
-        full = await conversationApi.get(active.id);
-      change(active.id, {
+      const result = await conversationApi.send(active.id, messageText);
+      const full = await conversationApi.get(active.id);
+      updateConversationState(active.id, {
         title: full.title,
-        updatedAt: a.timestamp,
-        messages: [...snapshot.filter((m) => !m.failed), u, a],
+        updatedAt: full.updatedAt,
+        messages: (full.messages || []).map(normalize),
       });
-    } catch {
-      change(active.id, {
-        messages: [
-          ...snapshot.filter((m) => !m.id.startsWith("pending-")),
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: "Your user message remains saved. Please try again.",
-            failed: true,
-            source: text,
-          },
-        ],
-      });
-      setNotice("Unable to save the assistant response.");
+
+      if (result.error) {
+        setNotice(result.error.message || "QueryNova AI request returned an error.");
+      }
+    } catch (err) {
+      setNotice("The request could not be processed. Please check backend configuration.");
     } finally {
       setLoading(false);
     }
   }
+
   async function remove(id) {
     if (!confirm("Delete this conversation?")) return;
     try {
       await conversationApi.remove(id);
-      let rest = conversations.filter((c) => c.id !== id);
+      const rest = conversations.filter((c) => c.id !== id);
       setConversations(rest);
-      id === activeId && (rest[0] ? select(rest[0].id) : newChat());
+      if (id === activeId) {
+        rest[0] ? select(rest[0].id) : newChat();
+      }
     } catch {
       setNotice("Unable to delete this conversation.");
     }
   }
+
   async function rename(c) {
-    let title = prompt("Rename conversation", c.title);
+    const title = prompt("Rename conversation", c.title);
     if (!title?.trim()) return;
     try {
-      let saved = await conversationApi.rename(c.id, title);
-      change(c.id, saved);
+      const saved = await conversationApi.rename(c.id, title);
+      updateConversationState(c.id, saved);
     } catch {
       setNotice("Unable to rename this conversation.");
     }
   }
-  let visible = conversations.filter((c) =>
-    c.title.toLowerCase().includes(search.toLowerCase()),
+
+  const visibleConversations = conversations.filter((c) =>
+    (c.title || "").toLowerCase().includes(search.toLowerCase())
   );
-  let regenerate = async (m) => {
+
+  const regenerate = async (m) => {
     if (loading || !active) return;
     setLoading(true);
     try {
-      let r = await conversationApi.regenerate(active.id, m.id);
-      change(active.id, {
+      const r = await conversationApi.regenerate(active.id, m.id);
+      updateConversationState(active.id, {
         messages: active.messages.map((x) =>
-          x.id === m.id ? normalize(r.message) : x,
+          x.id === m.id ? normalize(r.message) : x
         ),
       });
-    } catch {
+    } catch (err) {
       setNotice("Unable to regenerate this response.");
     } finally {
       setLoading(false);
     }
   };
+
   return (
     <main>
       <aside className={mobile ? "show" : ""}>
         <div className="brand">
-          <span>✦</span> QueryNova <b>AI</b>
+          <span>✦</span> QueryNova
         </div>
-        <button className="new" onClick={newChat}>
+        <button className="new" onClick={newChat} disabled={loading}>
           <Plus size={16} /> New chat
         </button>
         <div className="conversation-search">
@@ -461,9 +497,9 @@ function App() {
             aria-label="Search conversations"
           />
         </div>
-        {Object.entries(groups(visible)).map(
+        {Object.entries(groups(visibleConversations)).map(
           ([name, list]) =>
-            list.length && (
+            list.length > 0 && (
               <section className="chat-list" key={name}>
                 <p className="section">{name.toUpperCase()}</p>
                 {list.map((c) => (
@@ -473,7 +509,10 @@ function App() {
                   >
                     <button onClick={() => select(c.id)}>
                       <Clock3 size={14} />
-                      <span>{c.title}</span>
+                      <span>
+                        <b>{c.title || "New chat"}</b>
+                        <small>{c.preview}</small>
+                      </span>
                     </button>
                     <details>
                       <summary aria-label="Conversation actions">
@@ -487,24 +526,23 @@ function App() {
                   </div>
                 ))}
               </section>
-            ),
+            )
         )}
         <Explorer />
         <div className="side-bottom">
           <div className="connection">
-            <i className={health.ok ? "" : "offline"} />
+            <i className={health.loading ? "loading" : health.ok ? "" : "offline"} />
             <div>
-              <b>SQLite</b>
+              <b>SQLite Database</b>
               <span>
-                {health.ok
-                  ? `${health.tables} tables · Connected`
-                  : "Database unavailable"}
+                {health.loading
+                  ? "Checking health..."
+                  : health.ok
+                    ? `${health.tables} tables · Connected`
+                    : "Database unavailable"}
               </span>
             </div>
           </div>
-          <button>
-            <Settings size={15} /> Settings
-          </button>
         </div>
       </aside>
       <section className="workspace">
@@ -518,11 +556,17 @@ function App() {
           </button>
           <div className="header-brand">
             <span>✦</span>
-            <b>QueryNova AI</b>
+            <b>QueryNova</b>
           </div>
           <div className={"connected " + (health.ok ? "" : "unavailable")}>
             <i />
-            <span>{health.ok ? "Connected" : "Database unavailable"}</span>
+            <span>
+              {health.loading
+                ? "Connecting..."
+                : health.ok
+                  ? "Connected"
+                  : "Database unavailable"}
+            </span>
             <b>{health.ok ? "SQLite" : ""}</b>
           </div>
         </header>
@@ -531,10 +575,10 @@ function App() {
             <div className="error">
               <AlertTriangle />
               <div>
-                <b>Conversation notice</b>
+                <b>Notice</b>
                 <p>{notice}</p>
                 <button onClick={() => activeId && select(activeId)}>
-                  Retry
+                  Refresh
                 </button>
               </div>
             </div>
@@ -546,14 +590,14 @@ function App() {
           ) : !active.messages?.length ? (
             <div className="empty">
               <div className="nova">✦</div>
-              <h1>QueryNova AI</h1>
-              <p>Ask your data. Discover what’s next.</p>
+              <h1>QueryNova</h1>
+              <p>Ask your data. Discover insights instantly.</p>
               <span className="landing-copy">
-                Your database has answers. You just need to ask.
+                Query Nova bridges natural language with SQLite databases.
               </span>
               <div className="prompt-cards">
                 {prompts.map(([t, q, I]) => (
-                  <button key={t} onClick={() => send(q)}>
+                  <button key={t} onClick={() => send(q)} disabled={loading}>
                     <I />
                     <b>{t}</b>
                     <span>{q}</span>
@@ -562,11 +606,13 @@ function App() {
               </div>
               <div className="quick">
                 {[
-                  "Which products have never been ordered?",
-                  "Show monthly revenue for this year",
-                  "Draw the ER diagram for this database",
+                  "give me all product names",
+                  "show me the top 5 products by revenue",
+                  "give me the name of all tables present inside the database",
+                  "draw the ER diagram",
+                  "show revenue by product as a chart",
                 ].map((q) => (
-                  <button key={q} onClick={() => send(q)}>
+                  <button key={q} onClick={() => send(q)} disabled={loading}>
                     {q}
                   </button>
                 ))}
@@ -577,7 +623,7 @@ function App() {
               <Message
                 m={m}
                 key={m.id}
-                retry={(x) => send(x.source, x.id)}
+                retry={() => send(m.content)}
                 regenerate={regenerate}
               />
             ))
@@ -586,10 +632,9 @@ function App() {
             <div className="loading">
               <Sparkles size={16} />
               <div>
-                <b>QueryNova is analyzing your data…</b>
+                <b>QueryNova is analyzing your request…</b>
                 <span>
-                  Understanding your question · Checking the database ·
-                  Preparing insights
+                  Understanding question · Querying SQLite database · Generating insights
                 </span>
               </div>
             </div>
@@ -608,15 +653,16 @@ function App() {
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask anything about your database…"
           />
-          <button disabled={loading || !active} aria-label="Send">
+          <button disabled={loading || !active || !input.trim()} aria-label="Send">
             <Send size={18} />
           </button>
         </form>
         <p className="disclaimer">
-          QueryNova can make mistakes. Verify important results.
+          QueryNova AI can make mistakes. Verify important financial or analytical results.
         </p>
       </section>
     </main>
   );
 }
+
 createRoot(document.getElementById("root")).render(<App />);

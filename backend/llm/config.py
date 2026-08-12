@@ -10,4 +10,10 @@ class OpenRouterConfig:
 
     @classmethod
     def from_environment(cls):
-        return cls(os.getenv('OPENROUTER_API_KEY', ''), os.getenv('OPENROUTER_MODEL', 'openrouter/free'), os.getenv('OPENROUTER_SITE_URL', ''), os.getenv('OPENROUTER_APP_NAME', 'QueryNova AI'))
+        return cls(
+            api_key=os.getenv('OPENROUTER_API_KEY', '').strip(),
+            model=os.getenv('OPENROUTER_MODEL', 'openrouter/free').strip() or 'openrouter/free',
+            site_url=os.getenv('OPENROUTER_SITE_URL', '').strip(),
+            app_name=os.getenv('OPENROUTER_APP_NAME', 'QueryNova').strip() or 'QueryNova',
+        )
+

@@ -1,18 +1,23 @@
 import time
+from functools import lru_cache
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 try:
-    from backend.config import DATABASE_URL, MAX_QUERY_ROWS
+    from backend.config import DATABASE_URL, MAX_QUERY_ROWS, QUERY_TIMEOUT_SECONDS
     from backend.database.sql_validator import validate_read_only_sql, SQLValidationError
 except ModuleNotFoundError:
-    from config import DATABASE_URL, MAX_QUERY_ROWS
+    from config import DATABASE_URL, MAX_QUERY_ROWS, QUERY_TIMEOUT_SECONDS
     from database.sql_validator import validate_read_only_sql, SQLValidationError
+
+@lru_cache(maxsize=1)
+def get_read_engine():
+    return create_engine(DATABASE_URL, connect_args={'timeout': QUERY_TIMEOUT_SECONDS})
 
 def execute_query(sql: str):
     started = time.perf_counter()
     try:
         safe_sql = validate_read_only_sql(sql)
-        engine = create_engine(DATABASE_URL)
+        engine = get_read_engine()
         with engine.connect() as con:
             result = con.execute(text(safe_sql))
             rows = [dict(row._mapping) for row in result.fetchmany(MAX_QUERY_ROWS)]
