@@ -1,4 +1,4 @@
-"""Vercel entry point for the QueryNova Flask API."""
+"""Vercel catch-all entry point for /api/* Flask routes."""
 import sys
 from pathlib import Path
 

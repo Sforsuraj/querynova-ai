@@ -33,15 +33,7 @@ def allowed_frontend_origins():
     """Read a comma-separated origin allow-list without trailing slashes."""
     configured = os.getenv('FRONTEND_URL', 'http://localhost:5173')
     origins = [origin.strip().rstrip('/') for origin in configured.split(',') if origin.strip()]
-    for always in [
-        'https://querynova-frontend.vercel.app',
-        'http://localhost:5173',
-        'http://localhost:3000',
-        'http://localhost:4173',
-    ]:
-        if always not in origins:
-            origins.append(always)
-    return origins
+    return origins or ['http://localhost:5173']
 
 
 def create_app():
@@ -50,7 +42,7 @@ def create_app():
     # --------------- CORS ---------------
     CORS(
         app,
-        resources={r'/*': {
+        resources={r'/api/*': {
             'origins': allowed_frontend_origins(),
             'allow_headers': ['Content-Type', 'Authorization', 'X-Requested-With'],
             'methods': ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -106,8 +98,7 @@ def create_app():
         return jsonify(
             error=True,
             code='INTERNAL_SERVER_ERROR',
-            message='QueryNova backend encountered an internal error. Please try again.',
-            details=str(error)
+            message='QueryNova backend encountered an internal error. Please try again.'
         ), 500
 
     # --------------- API routes ---------------

@@ -10,3 +10,4 @@ dist/
 *.db-journal
 !backend/data/ecommerce.db
 .vercel/
+.testdeps/
